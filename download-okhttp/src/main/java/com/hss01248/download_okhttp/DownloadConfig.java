@@ -105,6 +105,10 @@ public class DownloadConfig {
         return fileSizeAlreadyKnown;
     }
 
+    public void setCallback(IDownloadCallback callback) {
+        this.callback = callback;
+    }
+
     public IDownloadCallback getCallback() {
         return callback;
     }

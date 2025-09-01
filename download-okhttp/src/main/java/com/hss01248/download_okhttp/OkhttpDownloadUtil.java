@@ -7,6 +7,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -33,6 +34,7 @@ public class OkhttpDownloadUtil {
     volatile static  OkHttpClient client;
 
     volatile static Set<String> runningTask = new CopyOnWriteArraySet<>();
+    static HashMap<String,IDownloadCallback> callbackHashMap = new HashMap<>();
 
     public static  void pauseOrStop(String url){
         runningTask.remove(url);
@@ -101,12 +103,15 @@ public class OkhttpDownloadUtil {
 
         initClient();
         if(runningTask.contains(url)){
-            w("该url已经在下载中",url);
-            callback.onFailed(url,filePath,"","该url已经在下载中",null);
+            w("该url已经在下载中,切换callback",url);
+            //callback.onFailed(url,filePath,"","该url已经在下载中",null);
+            IDownloadCallback iDownloadCallback = callbackHashMap.get(url);
+            if(iDownloadCallback instanceof DownloadCallbackProxy){
+                DownloadCallbackProxy callbackProxy = (DownloadCallbackProxy) iDownloadCallback;
+                callbackProxy.setCallback(config.getCallback());
+            }
             return;
         }
-
-
        try {
            filePath = FileAndDirUtil.dealFilePath(config);
            config.setFilePath(filePath);
@@ -130,6 +135,10 @@ public class OkhttpDownloadUtil {
             return;
         }
         runningTask.add(url);
+       DownloadCallbackProxy proxy = new DownloadCallbackProxy().setCallback(callback);
+       callbackHashMap.put(url,proxy);
+       callback = proxy;
+       config.setCallback(proxy);
         boolean isRangeRequest = false;
         if(file.exists() && file.isFile() && file.length() >0){
             if(forceRedownload){
@@ -177,6 +186,7 @@ public class OkhttpDownloadUtil {
                         //已经是下载成功的
                         d("file already exist and same bytes as header", filePath,url);
                         runningTask.remove(url);
+                        callbackHashMap.remove(url);
                         callback.onSuccess(url,filePath);
                         return;
                     }else {
@@ -199,12 +209,14 @@ public class OkhttpDownloadUtil {
             if(!response.isSuccessful()){
                 w("download failed0",url,response.code(),response.message());
                 runningTask.remove(url);
+                callbackHashMap.remove(url);
                 callback.onFailed(url,filePath,response.code()+"","download failed: "+response.message(),null);
                 return;
             }
             if(response.body() == null ){
                 w("download failed: request success but response body is empty!",url,response.code(),response.message());
                 runningTask.remove(url);
+                callbackHashMap.remove(url);
                 callback.onFailed(url,filePath,"","request success but response body is empty! ",null);
                 return;
             }
@@ -225,6 +237,7 @@ public class OkhttpDownloadUtil {
                             callback.onSuccess(url,file.getAbsolutePath());
                             d("文件大小与远程一致2,"+url);
                             runningTask.remove(url);
+                            callbackHashMap.remove(url);
                             return;
                         }else {
                             file.delete();
@@ -253,6 +266,7 @@ public class OkhttpDownloadUtil {
             Long finalFileSizeAlreadyKnown1 = fileSizeAlreadyKnown;
             long len = file.length();
             try{
+                IDownloadCallback finalCallback = callback;
                 boolean success = writeFileFromIS(url,file, inputStream, append,config, new IDownloadCallback() {
                     @Override
                     public void onSuccess(String url, String path) {
@@ -279,7 +293,7 @@ public class OkhttpDownloadUtil {
                         if(lastReceived ==0){
                             lastReceived = alreadyReceived;
                             lastProgressTime = System.currentTimeMillis();
-                            callback.onProgress(url,path,total,alreadyReceived,0L);
+                            finalCallback.onProgress(url,path,total,alreadyReceived,0L);
                         }else {
                             long changed = alreadyReceived - lastReceived;
                             long speed = 0;
@@ -288,7 +302,7 @@ public class OkhttpDownloadUtil {
                             }
                             lastProgressTime = System.currentTimeMillis();
                             lastReceived = alreadyReceived;
-                            callback.onProgress(url,path,total,alreadyReceived,speed);
+                            finalCallback.onProgress(url,path,total,alreadyReceived,speed);
                             if(finalFileSizeAlreadyKnown1 !=null){
                                 d("download-progress",((alreadyReceived+len)*100.0/finalFileSizeAlreadyKnown1)+"%, "
                                         +url, (alreadyReceived+len)/1024+"KB, speed: "+speed/1024+"KB/s");
@@ -297,6 +311,7 @@ public class OkhttpDownloadUtil {
                     }
                 });
                 runningTask.remove(url);
+                callbackHashMap.remove(url);
                 if(success){
                     //对比一下文件大小,相等才是成功:
                     if(fileSizeAlreadyKnown !=null){
@@ -323,6 +338,7 @@ public class OkhttpDownloadUtil {
         }catch (Throwable throwable){
             w("download failed-reqeust failed",url,filePath,throwable);
             runningTask.remove(url);
+            callbackHashMap.remove(url);
             callback.onFailed(url,filePath,"","download file  failed: "+ throwable.getMessage(),throwable);
         }
     }
@@ -444,15 +460,17 @@ public class OkhttpDownloadUtil {
         String  url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4";
         DownloadConfig.newBuilder()
                 .url(url)
-                .saveDir("/Users/hss/Downloads")
+                .saveDir("/Users/hss/Downloads2")
                 .start(new IDownloadCallback() {
                     @Override
                     public void onSuccess(String url, String path) {
+                        System.out.println("onSuccess: " + url + " " + path);
 
                     }
 
                     @Override
                     public void onFailed(String url, String path, String code, String msg, Throwable e) {
+                        System.out.println("onFailed: " + url + " " + path + " " + code + " " + msg);
 
                     }
                 });

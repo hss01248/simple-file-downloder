@@ -35,11 +35,6 @@ public class OkhttpDownloadUtil {
     volatile static Set<String> runningTask = new CopyOnWriteArraySet<>();
     static HashMap<String, IDownloadCallback> callbackHashMap = new HashMap<>();
 
-    /**
-     * 临时文件后缀，下载过程中使用临时文件，下载完成后重命名为最终文件名
-     */
-    public static final String TEMP_FILE_SUFFIX = ".tmp";
-
     public static void pauseOrStop(String url) {
         runningTask.remove(url);
     }
@@ -122,8 +117,6 @@ public class OkhttpDownloadUtil {
         }
 
         File file = new File(filePath);
-        // 使用临时文件进行下载
-        File tempFile = new File(filePath + TEMP_FILE_SUFFIX);
 
         Request.Builder builder = new Request.Builder()
                 .url(url)
@@ -142,105 +135,106 @@ public class OkhttpDownloadUtil {
         callbackHashMap.put(url, proxy);
         callback = proxy;
         config.setCallback(proxy);
+
         boolean isRangeRequest = false;
-        // 优先检查最终文件是否已存在且完整
+        File tempFile = null;
+
+        // 首先发送 HEAD 请求获取 Content-Length（如果未知）
+        if (fileSizeAlreadyKnown == null || fileSizeAlreadyKnown == 0) {
+            Request.Builder headBuilder = new Request.Builder()
+                    .url(url)
+                    .head();
+            if (headers != null) {
+                for (String s : headers.keySet()) {
+                    headBuilder.header(s, headers.get(s) + "");
+                }
+            }
+            Request headRequest = headBuilder.build();
+            try {
+                Response headResponse = client.newCall(headRequest).execute();
+                if (headResponse.isSuccessful()) {
+                    String lenStr = headResponse.header("Content-Length");
+                    if (lenStr != null && !"".equals(lenStr)) {
+                        try {
+                            fileSizeAlreadyKnown = Long.parseLong(lenStr);
+                        } catch (Throwable throwable) {
+                        }
+                    }
+                } else {
+                    w("head() request failed", url, headResponse.code(), headResponse.message());
+                }
+            } catch (Throwable throwable) {
+                w("head() request failed", url, throwable);
+            }
+        }
+
+        // 根据 Content-Length 生成临时文件路径
+        if (fileSizeAlreadyKnown != null && fileSizeAlreadyKnown > 0) {
+            tempFile = new File(FileAndDirUtil.getTempFilePath(filePath, fileSizeAlreadyKnown));
+        } else {
+            // 如果没有 Content-Length，使用旧格式
+            tempFile = new File(filePath + ".0.tmp");
+        }
+
+        d("tempFile path: " + tempFile.getAbsolutePath(), "content-length: " + fileSizeAlreadyKnown);
+
+        // 优先检查最终文件是否已存在
         if (file.exists() && file.isFile() && file.length() > 0) {
             if (forceRedownload) {
                 file.delete();
-                tempFile.delete();
+                // 清理所有相关临时文件
+                FileAndDirUtil.cleanupOtherTempFiles(file, null);
             } else {
-                // 断点续传:
-                boolean supportRanges = true;
-                if (fileSizeAlreadyKnown == null || fileSizeAlreadyKnown == 0) {
-                    supportRanges = false;
-                    Request.Builder builder1 = new Request.Builder()
-                            .url(url)
-                            .head();
-
-                    if (headers != null) {
-                        for (String s : headers.keySet()) {
-                            builder1.header(s, headers.get(s) + "");
-                        }
-                    }
-                    Request request = builder1.build();
-                    try {
-                        Response response = client.newCall(request).execute();
-                        if (response.isSuccessful()) {
-                            String lenStr = response.header("Content-Length");
-                            supportRanges = "bytes".equals(response.header("Accept-Ranges"));
-                            if (lenStr != null && !"".equals(lenStr)) {
-                                try {
-                                    fileSizeAlreadyKnown = Long.parseLong(lenStr);
-                                } catch (Throwable throwable) {
-                                }
-                            }
-                        } else {
-                            w("head() request failed0", url, response.code(), response.message());
-                        }
-                    } catch (Throwable throwable) {
-                        w("head() request failed", url, throwable);
-                    }
-                }
-                d("file.length:" + file.length(), "content-length:" + fileSizeAlreadyKnown,
-                        "服务端是否支持断点续传:" + supportRanges, "客户端是否允许断点续传:" + (!notAcceptRanges));
                 if (fileSizeAlreadyKnown != null && fileSizeAlreadyKnown > 0) {
-                    // args[0] = file.length:43373950
-                    // │ args[1] = content-length:37629451
-
                     if (file.length() == fileSizeAlreadyKnown) {
-                        // 已经是下载成功的
+                        // 文件大小一致，已经下载完成
                         d("file already exist and same bytes as header", filePath, url);
                         runningTask.remove(url);
                         callbackHashMap.remove(url);
                         // 清理可能存在的临时文件
-                        tempFile.delete();
+                        FileAndDirUtil.cleanupOtherTempFiles(file, null);
                         callback.onSuccess(url, filePath);
                         return;
                     } else {
-                        // 最终文件不完整，删除它，后面从临时文件续传或重新下载
-                        file.delete();
+                        // 服务端文件大小与本地不一致，说明服务端文件已变更
+                        d("server file changed, local size: " + file.length() + ", remote size: "
+                                + fileSizeAlreadyKnown);
+                        if (config.isKeepHistoryVersions()) {
+                            // 保留历史版本
+                            if (!FileAndDirUtil.renameToHistoryVersion(file, config.getMaxHistoryVersions())) {
+                                w("failed to rename old file to history version", file.getAbsolutePath());
+                            }
+                        } else {
+                            // 直接删除旧文件
+                            file.delete();
+                        }
+                        // 清理旧的临时文件（大小不匹配的）
+                        FileAndDirUtil.cleanupOtherTempFiles(file, tempFile);
                     }
+                } else {
+                    // 没有 Content-Length，无法判断是否需要重新下载，跳过
+                    d("file exists but no content-length to compare, assuming complete", filePath);
+                    runningTask.remove(url);
+                    callbackHashMap.remove(url);
+                    callback.onSuccess(url, filePath);
+                    return;
                 }
             }
         }
-        // 检查临时文件是否存在，用于断点续传
+
+        // 检查是否存在其他临时文件（可能是之前下载不同大小版本的遗留）
+        File existingTempFile = FileAndDirUtil.findMatchingTempFile(file, fileSizeAlreadyKnown);
+        if (existingTempFile != null && !existingTempFile.equals(tempFile)) {
+            // 存在大小不匹配的临时文件，说明服务端文件已变更，删除旧临时文件
+            d("found old temp file with different size, deleting: " + existingTempFile.getName());
+            existingTempFile.delete();
+        }
+
+        // 检查当前临时文件是否存在，用于断点续传
         if (tempFile.exists() && tempFile.isFile() && tempFile.length() > 0) {
             if (forceRedownload) {
                 tempFile.delete();
             } else {
-                // 从临时文件断点续传
-                boolean supportRanges = true;
-                if (fileSizeAlreadyKnown == null || fileSizeAlreadyKnown == 0) {
-                    supportRanges = false;
-                    Request.Builder builder1 = new Request.Builder()
-                            .url(url)
-                            .head();
-                    if (headers != null) {
-                        for (String s : headers.keySet()) {
-                            builder1.header(s, headers.get(s) + "");
-                        }
-                    }
-                    Request request = builder1.build();
-                    try {
-                        Response response = client.newCall(request).execute();
-                        if (response.isSuccessful()) {
-                            String lenStr = response.header("Content-Length");
-                            supportRanges = "bytes".equals(response.header("Accept-Ranges"));
-                            if (lenStr != null && !"".equals(lenStr)) {
-                                try {
-                                    fileSizeAlreadyKnown = Long.parseLong(lenStr);
-                                } catch (Throwable throwable) {
-                                }
-                            }
-                        } else {
-                            w("head() request failed (temp file)", url, response.code(), response.message());
-                        }
-                    } catch (Throwable throwable) {
-                        w("head() request failed (temp file)", url, throwable);
-                    }
-                }
-                d("tempFile.length:" + tempFile.length(), "content-length:" + fileSizeAlreadyKnown,
-                        "服务端是否支持断点续传:" + supportRanges, "客户端是否允许断点续传:" + (!notAcceptRanges));
                 if (fileSizeAlreadyKnown != null && fileSizeAlreadyKnown > 0) {
                     if (tempFile.length() == fileSizeAlreadyKnown) {
                         // 临时文件已下载完成，直接重命名
@@ -254,12 +248,13 @@ public class OkhttpDownloadUtil {
                             w("rename temp file to final file failed", tempFile.getAbsolutePath(), filePath);
                         }
                     } else if (tempFile.length() < fileSizeAlreadyKnown) {
-                        if (supportRanges && !notAcceptRanges) {
-                            // 服务端支持 + 客户端允许 断点续传
-                            builder.header("Range", "bytes=" + (tempFile.length()) + "-");
+                        // 临时文件未完成，尝试断点续传
+                        if (!notAcceptRanges) {
+                            builder.header("Range", "bytes=" + tempFile.length() + "-");
                             isRangeRequest = true;
+                            d("resuming download from byte " + tempFile.length());
                         } else {
-                            // 不支持断点续传，删除临时文件重新下载
+                            // 客户端不允许断点续传，删除临时文件重新下载
                             tempFile.delete();
                         }
                     } else {
@@ -298,7 +293,18 @@ public class OkhttpDownloadUtil {
                 String lenStr = response.header("Content-Length");
                 if (lenStr != null && !"".equals(lenStr)) {
                     try {
-                        fileSizeAlreadyKnown = Long.parseLong(lenStr);
+                        Long newContentLength = Long.parseLong(lenStr);
+                        if (fileSizeAlreadyKnown == null || fileSizeAlreadyKnown == 0) {
+                            fileSizeAlreadyKnown = newContentLength;
+                            // 更新临时文件路径
+                            File newTempFile = new File(FileAndDirUtil.getTempFilePath(filePath, fileSizeAlreadyKnown));
+                            if (!tempFile.equals(newTempFile)) {
+                                if (tempFile.exists()) {
+                                    tempFile.delete();
+                                }
+                                tempFile = newTempFile;
+                            }
+                        }
                     } catch (Throwable throwable) {
                     }
                 }
@@ -311,10 +317,15 @@ public class OkhttpDownloadUtil {
                             d("文件大小与远程一致2," + url);
                             runningTask.remove(url);
                             callbackHashMap.remove(url);
-                            tempFile.delete();
+                            FileAndDirUtil.cleanupOtherTempFiles(file, null);
                             return;
                         } else {
-                            file.delete();
+                            // 服务端文件已变更
+                            if (config.isKeepHistoryVersions()) {
+                                FileAndDirUtil.renameToHistoryVersion(file, config.getMaxHistoryVersions());
+                            } else {
+                                file.delete();
+                            }
                         }
                     } else {
                         file.delete();
@@ -546,7 +557,7 @@ public class OkhttpDownloadUtil {
 
     public static void main(String[] args) {
         OkhttpDownloadUtil.logEnable = true;
-        String url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4";
+        String url = "https://oss-kodo.hss01248.tech/test_video/navi-crud.mov";
         DownloadConfig.newBuilder()
                 .url(url)
                 .saveDir("/Users/hss/Downloads2")

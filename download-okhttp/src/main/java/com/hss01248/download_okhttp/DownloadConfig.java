@@ -43,7 +43,7 @@ public class DownloadConfig {
     private boolean forceRedownload;
     private boolean notAcceptRanges;
 
-    private Map<String,String> headers;
+    private Map<String, String> headers;
 
     private Long fileSizeAlreadyKnown;
 
@@ -51,9 +51,19 @@ public class DownloadConfig {
 
     private int progressCallbackIntervalMills;
 
-   private  int retryTimes;
+    private int retryTimes;
 
-   private String tag;
+    private String tag;
+
+    /**
+     * 是否保留历史版本，当服务端文件变更时，将旧文件重命名为 -1, -2 等后缀
+     */
+    private boolean keepHistoryVersions = true;
+
+    /**
+     * 最大保留的历史版本数
+     */
+    private int maxHistoryVersions = 5;
 
     public String getSaveDir() {
         return saveDir;
@@ -62,8 +72,6 @@ public class DownloadConfig {
     public void setFilePath(String filePath) {
         this.filePath = filePath;
     }
-
-
 
     public void setSaveDir(String saveDir) {
         this.saveDir = saveDir;
@@ -75,16 +83,16 @@ public class DownloadConfig {
         return requestSync;
     }
 
-    private  boolean requestSync;
-   private Map<String,Object> tags;
+    private boolean requestSync;
+    private Map<String, Object> tags;
 
     public String getUrl() {
         return url;
     }
 
     public String getFilePath() {
-        if(filePath ==null && saveDir !=null && fileName !=null){
-            filePath = saveDir + File.separator+fileName;
+        if (filePath == null && saveDir != null && fileName != null) {
+            filePath = saveDir + File.separator + fileName;
         }
         return filePath;
     }
@@ -129,6 +137,14 @@ public class DownloadConfig {
         return tags;
     }
 
+    public boolean isKeepHistoryVersions() {
+        return keepHistoryVersions;
+    }
+
+    public int getMaxHistoryVersions() {
+        return maxHistoryVersions;
+    }
+
     private DownloadConfig(Builder builder) {
         url = builder.url;
         filePath = builder.filePath;
@@ -144,10 +160,14 @@ public class DownloadConfig {
         requestSync = builder.requestSync;
         saveDir = builder.saveDir;
         fileName = builder.fileName;
+        keepHistoryVersions = builder.keepHistoryVersions;
+        maxHistoryVersions = builder.maxHistoryVersions;
     }
+
     public static Builder newBuilder() {
         return new Builder();
     }
+
     public static Builder newBuilder(DownloadConfig copy) {
         Builder builder = new Builder();
         builder.url = copy.getUrl();
@@ -164,6 +184,8 @@ public class DownloadConfig {
         builder.requestSync = copy.requestSync;
         builder.saveDir = copy.getSaveDir();
         builder.fileName = copy.fileName;
+        builder.keepHistoryVersions = copy.isKeepHistoryVersions();
+        builder.maxHistoryVersions = copy.getMaxHistoryVersions();
         return builder;
     }
 
@@ -175,14 +197,16 @@ public class DownloadConfig {
         private Map<String, String> headers;
         private Long fileSizeAlreadyKnown;
         private IDownloadCallback callback;
-        private int progressCallbackIntervalMills = 300;//ms
+        private int progressCallbackIntervalMills = 300;// ms
 
         private int retryTimes;
         private String tag;
         private Map<String, Object> tags;
 
-        private  boolean requestSync = true;
+        private boolean requestSync = true;
         private String saveDir;
+        private boolean keepHistoryVersions = true;
+        private int maxHistoryVersions = 5;
 
         public Builder fileName(String fileName) {
             this.fileName = fileName;
@@ -194,11 +218,11 @@ public class DownloadConfig {
         private Builder() {
         }
 
-
         public Builder requestSync(boolean requestSync) {
             this.requestSync = requestSync;
             return this;
         }
+
         public Builder url(String val) {
             url = val;
             return this;
@@ -229,14 +253,10 @@ public class DownloadConfig {
             return this;
         }
 
-
-
         public Builder fileSizeAlreadyKnown(Long val) {
             fileSizeAlreadyKnown = val;
             return this;
         }
-
-
 
         public Builder progressCallbackIntervalMills(int val) {
             progressCallbackIntervalMills = val;
@@ -258,19 +278,36 @@ public class DownloadConfig {
             return this;
         }
 
-        public Builder addTag(String key,Object val) {
-            if(tags ==null){
+        public Builder addTag(String key, Object val) {
+            if (tags == null) {
                 tags = new HashMap<>();
             }
             tags.put(key, val);
             return this;
         }
 
-        public Builder addHeaders(String key,String val) {
-            if(headers ==null){
+        public Builder addHeaders(String key, String val) {
+            if (headers == null) {
                 headers = new HashMap<>();
             }
             headers.put(key, val);
+            return this;
+        }
+
+        /**
+         * 是否保留历史版本，当服务端文件变更时，将旧文件重命名为 -1, -2 等后缀
+         * 默认 false，直接覆盖旧文件
+         */
+        public Builder keepHistoryVersions(boolean val) {
+            keepHistoryVersions = val;
+            return this;
+        }
+
+        /**
+         * 最大保留的历史版本数，默认 5
+         */
+        public Builder maxHistoryVersions(int val) {
+            maxHistoryVersions = val;
             return this;
         }
 
@@ -283,9 +320,9 @@ public class DownloadConfig {
             DownloadConfig build = build();
             callback.onCodeStart(url, build.getFilePath());
             // sync async
-            if(build.isRequestSync()){
+            if (build.isRequestSync()) {
                 OkhttpDownloadUtil.downloadSync(build);
-            }else {
+            } else {
                 OkhttpDownloadUtil.downloadAsync(build);
             }
         }

@@ -4,7 +4,7 @@
 
 * no more depend on the fucking changeable android service.
 
-
+> **[CHANGELOG2](./CHANGELOG2.md)** | **[更新日志](./CHANGELOG2-ZH.md)**
 
 download-okhttp  is a java module ,can use in java server code;
 
@@ -48,6 +48,26 @@ DownloadConfig.newBuilder()
 the download can config as this:
 
 ![image-20240829173100173](https://cdn.jsdelivr.net/gh/shuiniuhss/myimages@main/imagemac3/image-20240829173100173.png)
+
+### New Features (v1.1.0)
+
+#### Smart Temp File & Resume
+- Temp file format: `filename.ext.{ContentLength}.tmp`
+- Auto-detect server file changes and clean up stale temp files
+
+#### History Version Management
+```java
+DownloadConfig.newBuilder()
+    .url(url)
+    .saveDir("/downloads")
+    .keepHistoryVersions(true)   // Keep old versions when server file changes
+    .maxHistoryVersions(3)       // Max versions to keep (default: 5)
+    .start(callback);
+```
+- Old files renamed to `filename(-1).ext`, `filename(-2).ext`...
+- Auto cleanup when exceeding max versions
+
+
 
 
 

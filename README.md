@@ -51,9 +51,10 @@ the download can config as this:
 
 ### New Features (v1.1.0)
 
-#### Smart Temp File & Resume
-- Temp file format: `filename.ext.{ContentLength}.tmp`
-- Auto-detect server file changes and clean up stale temp files
+#### Smart Temp File & Resume (Verified by Content-Length & ETag)
+- Temp file format: `filename.ext.{ContentLength}_{ETagFingerprint}.tmp`
+- Multi-factor detection for server file changes (Size + ETag fingerprint).
+- Auto-cleanup of stale temp files to prevent corrupted resumes.
 
 #### History Version Management
 ```java

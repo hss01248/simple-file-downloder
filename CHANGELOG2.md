@@ -8,15 +8,16 @@ _2026-01-19_
 
 ### New Features
 
-#### Smart Temp File Naming with Content-Length
-- Temp file naming format changed from `filename.ext.tmp` to `filename.ext.{ContentLength}.tmp`
-- Example: `video.mp4.12345678.tmp`
-- This enables intelligent detection of server-side file changes
+#### Smart Temp File Naming with Content-Length & ETag 指纹
+- Temp file naming format changed to `filename.ext.{ContentLength}_{ETagFingerprint}.tmp`
+- Example: `video.mp4.12345678_abc12345.tmp`
+- Uses ETag to detect file content changes even if the file size remains identical.
+- Falls back to `filename.ext.{ContentLength}.tmp` if no ETag is provided by the server.
 
-#### Server File Change Detection
-- Automatically detects when the remote file has been updated (by comparing Content-Length)
-- When detected, old temp files with mismatched sizes are automatically cleaned up
-- Prevents corrupted downloads from resuming with stale data
+#### Server File Change Detection (Multi-factor)
+- Detects changes via `Content-Length` and `ETag` fingerprint.
+- Automatically cleans up stale temp files when a change is detected.
+- Enhances data integrity for resumed downloads.
 
 #### History Version Management
 - New configuration: `keepHistoryVersions(boolean)` - Enable/disable keeping old file versions (default: `false`)
@@ -39,7 +40,8 @@ DownloadConfig.newBuilder()
 
 ### Internal Improvements
 
-#### FileAndDirUtil - New Helper Methods
+- **Fixed progress calculation bug**: Resolved an issue where initial downloaded bytes were double-counted in debug logs during resumed downloads (showing >100% progress).
+- **FileAndDirUtil - New Helper Methods**
 - `getTempFilePath(String, long)` - Generate temp file path with Content-Length
 - `extractContentLengthFromTempFile(String)` - Extract Content-Length from temp file name
 - `findMatchingTempFile(File, Long)` - Find matching temp file for resumption

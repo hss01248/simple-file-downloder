@@ -174,12 +174,25 @@ public class FileAndDirUtil {
     // ==================== 临时文件和历史版本管理方法 ====================
 
     /**
-     * 生成带 ContentLength 的临时文件路径
-     * 格式: 文件名.后缀.{ContentLength}.tmp
-     * 例如: video.mp4.12345678.tmp
+     * 生成带 ContentLength 和 ETag 的临时文件路径
+     * 格式: 文件名.后缀.{ContentLength}_{ETag缩写}.tmp
+     * 例如: video.mp4.12345678_abc123.tmp
+     *
+     * @param finalFilePath 最终文件路径
+     * @param contentLength 内容长度
+     * @param etag          ETag 缩写（前 8 位）
+     * @return 临时文件路径
      */
-    static String getTempFilePath(String finalFilePath, long contentLength) {
+    static String getTempFilePath(String finalFilePath, long contentLength, String etag) {
+        if (etag != null && !etag.isEmpty()) {
+            return finalFilePath + "." + contentLength + "_" + etag + ".tmp";
+        }
         return finalFilePath + "." + contentLength + ".tmp";
+    }
+
+    @Deprecated
+    static String getTempFilePath(String finalFilePath, long contentLength) {
+        return getTempFilePath(finalFilePath, contentLength, null);
     }
 
     /**
@@ -198,7 +211,10 @@ public class FileAndDirUtil {
         if (lastDot < 0) {
             return -1;
         }
-        String lengthStr = withoutTmp.substring(lastDot + 1);
+        String suffixAndEtag = withoutTmp.substring(lastDot + 1);
+        // 处理 12345678_etag 格式
+        int underscoreIdx = suffixAndEtag.indexOf('_');
+        String lengthStr = underscoreIdx > 0 ? suffixAndEtag.substring(0, underscoreIdx) : suffixAndEtag;
         try {
             return Long.parseLong(lengthStr);
         } catch (NumberFormatException e) {
@@ -207,13 +223,37 @@ public class FileAndDirUtil {
     }
 
     /**
-     * 查找与最终文件匹配的临时文件
-     * 
+     * 从临时文件名中提取 ETag
+     *
+     * @param tempFileName 临时文件名，如 video.mp4.12345678_abc123.tmp
+     * @return ETag 缩写，如果没有则返回空字符串
+     */
+    static String extractEtagFromTempFile(String tempFileName) {
+        if (tempFileName == null || !tempFileName.endsWith(".tmp")) {
+            return "";
+        }
+        String withoutTmp = tempFileName.substring(0, tempFileName.length() - 4);
+        int lastDot = withoutTmp.lastIndexOf('.');
+        if (lastDot < 0) {
+            return "";
+        }
+        String suffixAndEtag = withoutTmp.substring(lastDot + 1);
+        int underscoreIdx = suffixAndEtag.indexOf('_');
+        if (underscoreIdx > 0) {
+            return suffixAndEtag.substring(underscoreIdx + 1);
+        }
+        return "";
+    }
+
+    /**
+     * 查找与最终文件项匹配的临时文件
+     *
      * @param finalFile             最终文件
-     * @param expectedContentLength 期望的 ContentLength，如果已知的话
+     * @param expectedContentLength 期望的 ContentLength
+     * @param expectedEtag          期望的 ETag（前 8 位）
      * @return 匹配的临时文件，如果没有则返回 null
      */
-    static File findMatchingTempFile(File finalFile, Long expectedContentLength) {
+    static File findMatchingTempFile(File finalFile, Long expectedContentLength, String expectedEtag) {
         File parentDir = finalFile.getParentFile();
         if (parentDir == null || !parentDir.exists()) {
             return null;
@@ -225,18 +265,42 @@ public class FileAndDirUtil {
             return null;
         }
 
-        // 如果知道期望的 ContentLength，优先返回匹配的
+        // 如果知道期望的参数，优先返回匹配的
         if (expectedContentLength != null && expectedContentLength > 0) {
-            String expectedTempName = baseName + "." + expectedContentLength + ".tmp";
+            // 构造带 ETag 的预期名称
+            String nameWithEtag = null;
+            if (expectedEtag != null && !expectedEtag.isEmpty()) {
+                nameWithEtag = baseName + "." + expectedContentLength + "_" + expectedEtag + ".tmp";
+            }
+            // 构造不带 ETag 的预期名称
+            String nameWithoutEtag = baseName + "." + expectedContentLength + ".tmp";
+
             for (File f : files) {
-                if (f.getName().equals(expectedTempName)) {
+                String name = f.getName();
+                if (nameWithEtag != null && name.equals(nameWithEtag)) {
                     return f;
+                }
+                if (name.equals(nameWithoutEtag)) {
+                    // 如果我们期望 ETag 但文件没有 ETag，或者一致，则返回
+                    // 如果期望 ETag 但文件名里有其他的 ETag（在循环中会被 nameWithEtag 捕获），则此处不匹配
+                    if (expectedEtag == null || expectedEtag.isEmpty()) {
+                        return f;
+                    }
                 }
             }
         }
 
-        // 找不到完全匹配的，返回第一个（后续逻辑会处理）
-        return files.length > 0 ? files[0] : null;
+        // 默认不随意返回，必须满足 Content-Length 匹配（如果没有提供 expectedContentLength 则返回第一个符合后缀的）
+        if (expectedContentLength == null) {
+            return files[0];
+        }
+
+        return null;
+    }
+
+    @Deprecated
+    static File findMatchingTempFile(File finalFile, Long expectedContentLength) {
+        return findMatchingTempFile(finalFile, expectedContentLength, null);
     }
 
     /**

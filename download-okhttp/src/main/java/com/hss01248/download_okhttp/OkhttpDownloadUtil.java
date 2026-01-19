@@ -139,7 +139,8 @@ public class OkhttpDownloadUtil {
         boolean isRangeRequest = false;
         File tempFile = null;
 
-        // 首先发送 HEAD 请求获取 Content-Length（如果未知）
+        String etag = null;
+        // 首先发送 HEAD 请求获取 Content-Length 和 ETag（如果未知）
         if (fileSizeAlreadyKnown == null || fileSizeAlreadyKnown == 0) {
             Request.Builder headBuilder = new Request.Builder()
                     .url(url)
@@ -160,6 +161,7 @@ public class OkhttpDownloadUtil {
                         } catch (Throwable throwable) {
                         }
                     }
+                    etag = headResponse.header("ETag");
                 } else {
                     w("head() request failed", url, headResponse.code(), headResponse.message());
                 }
@@ -168,9 +170,19 @@ public class OkhttpDownloadUtil {
             }
         }
 
-        // 根据 Content-Length 生成临时文件路径
+        // 处理 ETag 指纹
+        String etagFingerprint = null;
+        if (etag != null && !etag.isEmpty()) {
+            // 去掉引号并提取前 8 位
+            etagFingerprint = etag.replace("\"", "");
+            if (etagFingerprint.length() > 8) {
+                etagFingerprint = etagFingerprint.substring(0, 8);
+            }
+        }
+
+        // 根据 Content-Length 和 ETag 生成临时文件路径
         if (fileSizeAlreadyKnown != null && fileSizeAlreadyKnown > 0) {
-            tempFile = new File(FileAndDirUtil.getTempFilePath(filePath, fileSizeAlreadyKnown));
+            tempFile = new File(FileAndDirUtil.getTempFilePath(filePath, fileSizeAlreadyKnown, etagFingerprint));
         } else {
             // 如果没有 Content-Length，使用旧格式
             tempFile = new File(filePath + ".0.tmp");
@@ -222,13 +234,8 @@ public class OkhttpDownloadUtil {
             }
         }
 
-        // 检查是否存在其他临时文件（可能是之前下载不同大小版本的遗留）
-        File existingTempFile = FileAndDirUtil.findMatchingTempFile(file, fileSizeAlreadyKnown);
-        if (existingTempFile != null && !existingTempFile.equals(tempFile)) {
-            // 存在大小不匹配的临时文件，说明服务端文件已变更，删除旧临时文件
-            d("found old temp file with different size, deleting: " + existingTempFile.getName());
-            existingTempFile.delete();
-        }
+        // 清理其他不匹配的临时文件（可能是之前下载不同大小版本或不同 ETag 的遗留）
+        FileAndDirUtil.cleanupOtherTempFiles(file, tempFile);
 
         // 检查当前临时文件是否存在，用于断点续传
         if (tempFile.exists() && tempFile.isFile() && tempFile.length() > 0) {
@@ -296,8 +303,17 @@ public class OkhttpDownloadUtil {
                         Long newContentLength = Long.parseLong(lenStr);
                         if (fileSizeAlreadyKnown == null || fileSizeAlreadyKnown == 0) {
                             fileSizeAlreadyKnown = newContentLength;
+                            String currentEtag = response.header("ETag");
+                            String currentFingerprint = null;
+                            if (currentEtag != null && !currentEtag.isEmpty()) {
+                                currentFingerprint = currentEtag.replace("\"", "");
+                                if (currentFingerprint.length() > 8) {
+                                    currentFingerprint = currentFingerprint.substring(0, 8);
+                                }
+                            }
                             // 更新临时文件路径
-                            File newTempFile = new File(FileAndDirUtil.getTempFilePath(filePath, fileSizeAlreadyKnown));
+                            File newTempFile = new File(
+                                    FileAndDirUtil.getTempFilePath(filePath, fileSizeAlreadyKnown, currentFingerprint));
                             if (!tempFile.equals(newTempFile)) {
                                 if (tempFile.exists()) {
                                     tempFile.delete();
@@ -392,9 +408,9 @@ public class OkhttpDownloadUtil {
                             finalCallback.onProgress(url, path, total, alreadyReceived, speed);
                             if (finalFileSizeAlreadyKnown1 != null) {
                                 d("download-progress",
-                                        ((alreadyReceived + len) * 100.0 / finalFileSizeAlreadyKnown1) + "%, "
+                                        (alreadyReceived * 100.0 / finalFileSizeAlreadyKnown1) + "%, "
                                                 + url,
-                                        (alreadyReceived + len) / 1024 + "KB, speed: " + speed / 1024 + "KB/s");
+                                        alreadyReceived / 1024 + "KB, speed: " + speed / 1024 + "KB/s");
                             }
                         }
                     }
